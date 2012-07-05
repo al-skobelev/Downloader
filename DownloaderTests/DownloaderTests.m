@@ -3,7 +3,7 @@
 //  DownloaderTests
 //
 //  Created by Alexander Skobelev on 05/07/2012.
-//  Copyright (c) 2012 __MyCompanyName__. All rights reserved.
+//  Copyright (c) 2012 IZITEQ. All rights reserved.
 //
 
 #import "DownloaderTests.h"

@@ -1,16 +1,90 @@
-//
-//  AppDelegate.m
-//  Downloader
-//
-//  Created by Alexander Skobelev on 05/07/2012.
-//  Copyright (c) 2012 __MyCompanyName__. All rights reserved.
-//
+/****************************************************************************
+ * AppDelegate.m                                                            *
+ * Created by Alexander Skobelev                                            *
+ *                                                                          *
+ ****************************************************************************/
 
 #import "AppDelegate.h"
+#import "CommonUtils.h"
 
-@implementation AppDelegate
+//============================================================================
+@interface AppDelegate ()
+
+@property (strong, nonatomic) ConnectionRequest* request;
+@end
+
+//============================================================================
+@implementation AppDelegate 
 
 @synthesize window = _window;
+@synthesize request = _request;
+
+//----------------------------------------------------------------------------
+- (NSURL*) fileURL
+{
+    STATIC (_s_url, [NSURL URLWithString: @"https://s3-eu-west-1.amazonaws.com/izi-packages/d031fbd9-8942-4168-96ea-914a8a1d3f98.tar.gz"]);
+    return _s_url;
+}
+
+//----------------------------------------------------------------------------
+- (ConnectionManager*) connectionManager
+{
+    STATIC (_s_cmgr, [ConnectionManager new]); 
+    return _s_cmgr;
+}
+
+//----------------------------------------------------------------------------
+- (NSString*) downloadPath
+{
+    STATIC (_s_path, user_documents_path());
+    return _s_path;
+}
+
+//----------------------------------------------------------------------------
+- (BOOL) startDownloadWithCompletionHandler: (void (^)(NSError* err)) completionHandler
+                              updateHandler: (void (^)(size_t downloaded, size_t expected)) updateHandler
+{
+
+    NSURLRequest* req = [NSURLRequest requestWithURL: self.fileURL];
+    NSString* fname = [[self.fileURL path] lastPathComponent];
+    NSString* datapath = STR_ADDPATH (self.downloadPath, fname);
+
+    ConnectionRequest* creq = [ConnectionRequest new];
+    creq.request = req;
+    creq.datapath = datapath;
+
+    if (completionHandler) {
+        creq.completionHandler = ^(ConnectionRequest* req, NSError* err) {
+            completionHandler (err);
+        };
+    }
+
+    if (updateHandler) {
+        creq.updateHandler = ^(ConnectionRequest* req, size_t downloaded, size_t expected) {
+            updateHandler (downloaded, expected);
+        };
+    }
+
+    
+    if ([self.connectionManager addRequest: creq error: NULL])
+    {
+        self.request = creq;
+        return YES;
+    }
+    return NO;
+}
+
+//----------------------------------------------------------------------------
+- (void) stopDownload
+{
+    [self.connectionManager cancelRequest: self.request];
+}
+
+//----------------------------------------------------------------------------
+- (void) resetDownload
+{
+    unlink (STR_FSREP ([self.fileURL path]));
+}
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
