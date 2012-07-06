@@ -7,6 +7,9 @@
 #import "AppDelegate.h"
 #import "CommonUtils.h"
 
+#define DFNLOG(FMT$, ARGS$...) fprintf (stderr, "%s\n", [STRF(FMT$, ##ARGS$) UTF8String])
+// #define DFNLOG(FMT$, ARGS$...) NSLog (@"%s -- " FMT$, __PRETTY_FUNCTION__, ##ARGS$)
+
 //============================================================================
 @interface AppDelegate ()
 
@@ -22,7 +25,9 @@
 //----------------------------------------------------------------------------
 - (NSURL*) fileURL
 {
-    STATIC (_s_url, [NSURL URLWithString: @"https://s3-eu-west-1.amazonaws.com/izi-packages/d031fbd9-8942-4168-96ea-914a8a1d3f98.tar.gz"]);
+
+    STATIC (_s_url, [NSURL URLWithString: @"https://s3-eu-west-1.amazonaws.com/izi-testing/50.bin"]);
+    // STATIC (_s_url, [NSURL URLWithString: @"https://s3-eu-west-1.amazonaws.com/izi-packages/d031fbd9-8942-4168-96ea-914a8a1d3f98.tar.gz"]);
     return _s_url;
 }
 
@@ -55,6 +60,9 @@
 
     if (completionHandler) {
         creq.completionHandler = ^(ConnectionRequest* req, NSError* err) {
+            DFNLOG(@"IN COMPLETION HANDLER FOR REQUEST: %@", req);
+            if (err) DFNLOG(@"-- ERROR: %@", [err localizedDescription]);
+
             completionHandler (err);
         };
     }
