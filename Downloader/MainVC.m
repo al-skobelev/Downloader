@@ -42,12 +42,11 @@
 //----------------------------------------------------------------------------
 - (void) updateUI: (BOOL) downloading
 {
-    self.resetBtn.enabled = ! downloading;
+    self.resetBtn.enabled = ! downloading && (self.progressView.progress == 1);
     self.startBtn.enabled = ! downloading;
     self.stopBtn.enabled  = downloading;
 
     self.progressView.hidden = ! downloading;
-    //self.countLabel.hidden = ! downloading;
 
     if (downloading) {
         if (! self.activityIndicator.isAnimating) {
@@ -58,6 +57,10 @@
         [self.activityIndicator stopAnimating];
     }
     
+    if (! downloading && (self.progressView.progress == 0))
+    {
+        self.countLabel.text = @"";
+    }
 }
 
 //----------------------------------------------------------------------------
@@ -75,8 +78,6 @@
 //----------------------------------------------------------------------------
 - (void) downloadFinishedWithError: (NSError*) error
 {
-    [self updateUI: NO];
-
     if (error)
     {
         [self showPlainAlertWithTitle: @"Download Error"
@@ -85,6 +86,7 @@
     else {
         self.progressView.progress = 1.0;
     }
+    [self updateUI: NO];
 }
 
 //----------------------------------------------------------------------------
@@ -98,7 +100,6 @@
     }
     else {
         self.countLabel.text = STRF (@"%d", downloaded);
-        self.progressView.progress = 0;
     }
 }
 
@@ -123,8 +124,10 @@
 //----------------------------------------------------------------------------
 - (IBAction) onResetBtn 
 {
-    [self updateUI: NO];
     [APPD resetDownload];
+
+    self.progressView.progress = 0;
+    [self updateUI: NO];
 }
 
 - (void)viewDidUnload {

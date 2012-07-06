@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D916ADBF15A6DA410054E150 /* Reachability.m in Sources */ = {isa = PBXBuildFile; fileRef = D916ADBE15A6DA410054E150 /* Reachability.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
+		D916ADC215A6DAAC0054E150 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D916ADC115A6DAAC0054E150 /* SystemConfiguration.framework */; };
 		D9B587CA15A5A61100CEFC5C /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D9B587C915A5A61100CEFC5C /* UIKit.framework */; };
 		D9B587CC15A5A61100CEFC5C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D9B587CB15A5A61100CEFC5C /* Foundation.framework */; };
 		D9B587CE15A5A61100CEFC5C /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D9B587CD15A5A61100CEFC5C /* CoreGraphics.framework */; };
@@ -35,6 +37,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		D916ADBD15A6DA410054E150 /* Reachability.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Reachability.h; sourceTree = "<group>"; };
+		D916ADBE15A6DA410054E150 /* Reachability.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = Reachability.m; sourceTree = "<group>"; };
+		D916ADC115A6DAAC0054E150 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		D9B587C515A5A61100CEFC5C /* Downloader.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Downloader.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D9B587C915A5A61100CEFC5C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		D9B587CB15A5A61100CEFC5C /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -65,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D916ADC215A6DAAC0054E150 /* SystemConfiguration.framework in Frameworks */,
 				D9B587CA15A5A61100CEFC5C /* UIKit.framework in Frameworks */,
 				D9B587CC15A5A61100CEFC5C /* Foundation.framework in Frameworks */,
 				D9B587CE15A5A61100CEFC5C /* CoreGraphics.framework in Frameworks */,
@@ -87,6 +93,7 @@
 		D9B587BA15A5A61100CEFC5C = {
 			isa = PBXGroup;
 			children = (
+				D916ADC115A6DAAC0054E150 /* SystemConfiguration.framework */,
 				D9B587CF15A5A61100CEFC5C /* Downloader */,
 				D9B587ED15A5A61100CEFC5C /* DownloaderTests */,
 				D9B587C815A5A61100CEFC5C /* Frameworks */,
@@ -117,6 +124,8 @@
 		D9B587CF15A5A61100CEFC5C /* Downloader */ = {
 			isa = PBXGroup;
 			children = (
+				D916ADBD15A6DA410054E150 /* Reachability.h */,
+				D916ADBE15A6DA410054E150 /* Reachability.m */,
 				D9B587D815A5A61100CEFC5C /* AppDelegate.h */,
 				D9B587D915A5A61100CEFC5C /* AppDelegate.m */,
 				D9B587DB15A5A61100CEFC5C /* MainStoryboard.storyboard */,
@@ -272,6 +281,7 @@
 				D9B587E015A5A61100CEFC5C /* MainVC.m in Sources */,
 				D9B5880015A5A6CF00CEFC5C /* ConnectionManager.m in Sources */,
 				D9B5880315A5B16D00CEFC5C /* CommonUtils.m in Sources */,
+				D916ADBF15A6DA410054E150 /* Reachability.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -441,6 +451,7 @@
 				D9B587FA15A5A61100CEFC5C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 		D9B587FB15A5A61100CEFC5C /* Build configuration list for PBXNativeTarget "DownloaderTests" */ = {
 			isa = XCConfigurationList;
@@ -449,6 +460,7 @@
 				D9B587FD15A5A61100CEFC5C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
