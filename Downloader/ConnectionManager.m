@@ -5,7 +5,6 @@
  ****************************************************************************/
 #import "CommonUtils.h"
 #import "ConnectionManager.h"
-#import "Reachability.h"
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -21,8 +20,8 @@
 #define DFNLOG(FMT$, ARGS$...) fprintf (stderr, "%s\n", [STRF(FMT$, ##ARGS$) UTF8String])
 // #define DFNLOG(FMT$, ARGS$...) NSLog (@"%s -- " FMT$, __PRETTY_FUNCTION__, ##ARGS$)
 
-NSString* get_active_iface_addr ();
-NSString* get_iface_addr (const char* iface);
+// NSString* get_active_iface_addr ();
+// NSString* get_iface_addr (const char* iface);
 
 //============================================================================
 @implementation ConnectionRequest 
@@ -52,30 +51,28 @@ NSString* get_iface_addr (const char* iface);
 
 @property (strong, nonatomic) ConnectionRequest* request;
 @property (strong, nonatomic) NSURLConnection*   connection;
-@property (strong, nonatomic) Reachability*      reachability;
 
 @property (copy, nonatomic)   NSString* downloadPath;
 @property (assign, nonatomic) size_t    contentLength;
 @property (assign, nonatomic) size_t    downloadedLength;
 @property (assign, nonatomic) BOOL      serverAcceptsRanges;
-@property (assign, nonatomic) NetworkStatus reachabilityStatus;;
-@property (copy, nonatomic)   NSString* ifaddr;
 
+@property (strong, nonatomic) NSTimer* retryTimer;
+@property (assign, nonatomic) int      retryCount;
 @end
 
 @implementation ConnectionInfo
 
 @synthesize request      = _request;
 @synthesize connection   = _connection;
-@synthesize reachability = _reachability;
 
 @synthesize downloadPath     = _downloadPath;
 @synthesize contentLength    = _contentLength;
 @synthesize downloadedLength = _downloadedLength;
 
 @synthesize serverAcceptsRanges = _serverAcceptsRanges;
-@synthesize reachabilityStatus  = _reachabilityStatus;
-@synthesize ifaddr = _ifaddr;
+@synthesize retryTimer = _retryTimer;
+@synthesize retryCount = _retryCount;
 @end
 
 
@@ -83,15 +80,14 @@ NSString* get_iface_addr (const char* iface);
 @interface ConnectionManager ()
 {
     NSMutableSet*   _active;
-    NSMutableSet*   _unreachable;
     NSMutableArray* _waited;
-    unsigned       _waitQueueLimit;
-    NSTimeInterval _requestDelay;
+    unsigned        _waitQueueLimit;
+    NSTimeInterval  _requestDelay;
 }
 
 @property (nonatomic, retain) NSDate* lastRequestDate;
 
-- (int) maybeReactivateConnection: (ConnectionInfo*) cinfo;
+//- (int) maybeReactivateConnection: (ConnectionInfo*) cinfo;
 @end
 
 
@@ -136,10 +132,9 @@ NSString* get_iface_addr (const char* iface);
         _requestDelay = delay;
 
         _active = [NSMutableSet new];
-        _unreachable = [NSMutableSet new];
         _waited = [NSMutableArray new];
 
-        ADD_OBSERVER (kReachabilityChangedNotification, self, onReachabilityNtf:);
+        //ADD_OBSERVER (kReachabilityChangedNotification, self, onReachabilityNtf:);
     }
     return self;
 }
@@ -213,6 +208,71 @@ NSString* get_iface_addr (const char* iface);
 }
 
 //----------------------------------------------------------------------------
+- (ConnectionInfo*) connectionInfoWithRequest: (ConnectionRequest*) creq
+{
+    ConnectionInfo* cinfo = [ConnectionInfo new];
+    //NSString* host = creq.request.URL.host;
+    
+    if (creq.datapath) 
+    {
+        unlink ([creq.datapath fileSystemRepresentation]);
+        
+        cinfo.downloadPath = STR_ADDEXT (creq.datapath, @"partial");
+        NSFileManager* fm = [NSFileManager defaultManager];
+        
+        if ([fm fileExistsAtPath: cinfo.downloadPath])
+        {
+            NSError* err;
+            NSDictionary* attrs = [fm attributesOfItemAtPath: cinfo.downloadPath
+                                                       error: &err];
+            if (attrs) {
+                cinfo.downloadedLength = attrs.fileSize;
+            }
+            else {
+                unlink ([cinfo.downloadPath fileSystemRepresentation]);
+            }
+            
+            if (cinfo.downloadedLength)
+            {
+                NSMutableURLRequest* req = [creq.request mutableCopy];
+                
+                id val = STRF(@"bytes=%d-", cinfo.downloadedLength);
+                [req setValue: val forHTTPHeaderField: @"Range"];
+                creq.request = req;
+            }
+        }
+    }
+    
+    NSURLConnection* connection;
+    connection = [NSURLConnection connectionWithRequest: creq.request
+                                               delegate: self];
+    if (connection) 
+    {
+        cinfo.request = creq;
+        cinfo.connection = connection;
+        
+        //self.lastRequestDate = now;
+    }
+
+    return cinfo;
+}
+
+//----------------------------------------------------------------------------
+- (BOOL) canActivateConnection
+{
+    if (!_limit || (_active.count < _limit))
+    {
+        NSDate* now = [NSDate date];
+        if (!_lastRequestDate
+            || ([now timeIntervalSinceDate: _lastRequestDate] > _requestDelay))
+        {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+//----------------------------------------------------------------------------
 - (int) activateRequest: (ConnectionRequest*) creq
 {
     DFNLOG(@"ACTIVATE: %@", creq);
@@ -228,22 +288,7 @@ NSString* get_iface_addr (const char* iface);
         else
         {
             ConnectionInfo* cinfo = [ConnectionInfo new];
-            NSString* host = creq.request.URL.host;
-
-            cinfo.reachability = [Reachability reachabilityWithHostName: host];
-            cinfo.reachabilityStatus = [cinfo.reachability currentReachabilityStatus];
-            cinfo.ifaddr = get_active_iface_addr();
-
-            [cinfo.reachability startNotifier];
-
-            if (NotReachable == cinfo.reachabilityStatus)
-            {
-                cinfo.request = creq;
-                [_unreachable addObject: cinfo];
-
-                DFNLOG(@" -- ADDED TO UNREACHABLE -- return 0");
-                return 0;
-            }
+            //NSString* host = creq.request.URL.host;
 
             if (creq.datapath) 
             {
@@ -382,18 +427,25 @@ NSString* get_iface_addr (const char* iface);
     for (ConnectionInfo* cinfo in _active) [cinfo.connection cancel];
 
     [_active removeAllObjects];
-    [_unreachable removeAllObjects];
 }
 
 //----------------------------------------------------------------------------
-// - (void) stopAllRequests
-// {
-//     [_waited removeAllObjects];
-    
-//     for (ConnectionInfo* cinfo in _active) [cinfo.connection cancel];
-//     [_active removeAllObjects];
-// }
+- (void) onRetryConnectionTimer: (NSTimer*) timer
+{
+    ConnectionInfo* cinfo = 
+        [[_active objectsPassingTest: ^(ConnectionInfo* obj, BOOL *stop) {
+                    return (BOOL)((obj.retryTimer == timer) ? (*stop = YES) : NO); }]
+            
+            anyObject];
 
+    if (!cinfo) return;
+
+    cinfo.retryTimer = nil;
+    cinfo.connection = [NSURLConnection 
+                           connectionWithRequest: cinfo.request.request
+                                        delegate: self];
+    self.lastRequestDate = [NSDate date];
+}
 
 // NSURLConnection delegate's methods
 //----------------------------------------------------------------------------
@@ -451,6 +503,7 @@ NSString* get_iface_addr (const char* iface);
     ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
     // ConnectionRequest* creq = cinfo.request;
 
+    cinfo.retryCount = 0;
     cinfo.serverAcceptsRanges = ([[[(NSHTTPURLResponse*)response allHeaderFields]
                                       objectForKey: @"Accept-Ranges"] 
                                      rangeOfString: @"bytes"].length > 0);
@@ -500,8 +553,8 @@ NSString* get_iface_addr (const char* iface);
 }
 
 //----------------------------------------------------------------------------
-- (void)  connection: (NSURLConnection*) connection 
-  didFinishWithError: (NSError*) err
+- (void) connection: (NSURLConnection*) connection 
+ didFinishWithError: (NSError*) err
 {
     @autoreleasepool
     {
@@ -509,18 +562,32 @@ NSString* get_iface_addr (const char* iface);
         ConnectionRequest* creq = cinfo.request;
 
         DFNLOG (@"Connection FINISHED: %@\nERROR: %@\n", creq.request.URL, err);
-        [cinfo.reachability stopNotifier];
+        //[cinfo.reachability stopNotifier];
             
         if ([_active containsObject: cinfo])
         {
-            if (! err)
+            if (err)
+            {
+                static NSTimeInterval _s_interval[] = { 1.0, 2.0, 3.0 };
+                cinfo.connection = nil;
+                
+                if (cinfo.retryCount < NELEMS(_s_interval))
+                {
+                    cinfo.retryTimer = [NSTimer scheduledTimerWithTimeInterval: _s_interval [cinfo.retryCount++]
+                                                                        target: self
+                                                                      selector: @selector(onRetryConnectionTimer:)
+                                                                      userInfo: nil
+                                                                       repeats: NO];
+                }                    
+            }
+            else 
             {
                 if (creq.datapath && cinfo.downloadPath)
                 {
                     unlink (STR_FSREP (creq.datapath));
                     
-
                     NSFileManager* fm = [NSFileManager defaultManager];
+
                     if (! [fm moveItemAtPath: cinfo.downloadPath
                                       toPath: creq.datapath
                                        error: &err])
@@ -529,19 +596,13 @@ NSString* get_iface_addr (const char* iface);
                     }
                 }
             }
-            else // if ((err.code == -1005) || (err.code == -1009)) // "The Internet connection appears to be offline."
-            {
-                if (0 == [self maybeReactivateConnection: cinfo])
-                {
-                    [self activateWaitedRequests];
-                    return;
-                }
-                [connection cancel];
-            }
 
-            [_active removeObject: cinfo];
-            if (creq) {
-                if (creq.completionHandler) creq.completionHandler (creq, err);
+            if (! cinfo.retryTimer) 
+            {
+                [_active removeObject: cinfo];
+                if (creq) {
+                    if (creq.completionHandler) creq.completionHandler (creq, err);
+                }
             }
         }
 
@@ -622,172 +683,151 @@ NSString* get_iface_addr (const char* iface);
     return nil;
 }
 
-//----------------------------------------------------------------------------
-- (int) maybeReactivateConnection: (ConnectionInfo*) cinfo
-{
-    DFNLOG(@"MAY BE REACTIVATE: %@", cinfo);
-    int res = -1;
-    if (cinfo)
-    {
-        NetworkStatus rstatus = [cinfo.reachability currentReachabilityStatus];
+// //----------------------------------------------------------------------------
+// - (int) maybeReactivateConnection: (ConnectionInfo*) cinfo
+// {
+//     DFNLOG(@"MAY BE REACTIVATE: %@", cinfo);
+//     int res = -1;
+//     if (cinfo)
+//     {
+//         NetworkStatus rstatus = [cinfo.reachability currentReachabilityStatus];
 
-        cinfo.reachabilityStatus = rstatus;
+//         cinfo.reachabilityStatus = rstatus;
 
-        BOOL active = [_active containsObject: cinfo];
-        BOOL unreachable = [_unreachable containsObject: cinfo];
-        BOOL reactivate = YES;
+//         BOOL active = [_active containsObject: cinfo];
 
-        NSString* ifaddr = get_active_iface_addr();
-        if (active && (NotReachable != rstatus))
-        {
-            if (ifaddr && STR_EQL (cinfo.ifaddr, ifaddr))
-            {
-                DFNLOG(@"SAME IFADDR: WILL NOT REACTIVATE ACTIVE");
-                return 0;
-            }
+//         NSString* ifaddr = get_active_iface_addr();
+//         if (active && (NotReachable != rstatus))
+//         {
+//             if (ifaddr && STR_EQL (cinfo.ifaddr, ifaddr))
+//             {
+//                 DFNLOG(@"SAME IFADDR: WILL NOT REACTIVATE ACTIVE");
+//                 return 0;
+//             }
 
-        }
-        if ((NotReachable == rstatus) && unreachable)
-        {
-            DFNLOG(@"NOT REACHABLE YET: WILL NOT REACTIVATE");
-            return 0;
-        }
+//         }
+//         if ((NotReachable == rstatus) && cinfo.retryTimer)
+//         {
+//             DFNLOG(@"NOT REACHABLE YET: WILL NOT REACTIVATE");
+//             return 0;
+//         }
 
-        // if (NotReachable != rstatus)
-        // {
-        //     // don't reactivate downloads that can not be resumed?
-        //     reactivate = !active || cinfo.serverAcceptsRanges;
-        // }
+//         DFNLOG(@"WILL REACTIVATE");
 
-        if (reactivate) 
-        {
-            DFNLOG(@"WILL REACTIVATE");
+//         if (active) 
+//         {
+//             DFNLOG(@"IT WAS ACTIVE: CANCEL IT");
 
-            if (active) 
-            {
-                DFNLOG(@"IT WAS ACTIVE: CANCEL IT");
+//             [_active removeObject: cinfo];
+//             [cinfo.connection cancel];
+//             cinfo.connection = nil;
+//         }
 
-                [_active removeObject: cinfo];
-                [cinfo.connection cancel];
-                cinfo.connection = nil;
-            }
-            else {
-                [_unreachable removeObject: cinfo];
-            }
+//         res = [self activateRequest: cinfo.request];
 
-            res = [self activateRequest: cinfo.request];
+//         if (res)
+//         {
+//             DFNLOG(@"FAILED TO REACTIVATE");
 
-            if (res)
-            {
-                DFNLOG(@"FAILED TO REACTIVATE");
-
-                if ((res == CONNECTION_MANAGER_ERROR_CODE_ACTIVE_LIMIT_EXCEEDED)
-                    || (res == CONNECTION_MANAGER_ERROR_CODE_SHOULD_DELAY))
-                {
-                    if (_waited.count) [_waited insertObject: cinfo.request atIndex: 0];
-                    else [_waited addObject: cinfo.request];
+//             if ((res == CONNECTION_MANAGER_ERROR_CODE_ACTIVE_LIMIT_EXCEEDED)
+//                 || (res == CONNECTION_MANAGER_ERROR_CODE_SHOULD_DELAY))
+//             {
+//                 if (_waited.count) [_waited insertObject: cinfo.request atIndex: 0];
+//                 else [_waited addObject: cinfo.request];
                     
-                    res = 0;
-                }
-            }
-        }
-    }
+//                 res = 0;
+//             }
+//         }
+//     }
 
-    DFNLOG(@"MAY BE REACTIVATE RETURN %d", res);
-    return res;
-}
+//     DFNLOG(@"MAY BE REACTIVATE RETURN %d", res);
+//     return res;
+// }
 
-//----------------------------------------------------------------------------
-- (void) onReachabilityNtf: (NSNotification*) ntf
-{
-    Reachability* reachability = ntf.object;
+// //----------------------------------------------------------------------------
+// - (void) onReachabilityNtf: (NSNotification*) ntf
+// {
+//     Reachability* reachability = ntf.object;
 
-    BOOL active = YES;
-    ConnectionInfo* cinfo = 
-        [[_active objectsPassingTest: ^(ConnectionInfo* obj, BOOL *stop) {
-            return (BOOL)((obj.reachability == reachability) ? (*stop = YES) : NO); }]
+//     BOOL active = YES;
+//     ConnectionInfo* cinfo = 
+//         [[_active objectsPassingTest: ^(ConnectionInfo* obj, BOOL *stop) {
+//             return (BOOL)((obj.reachability == reachability) ? (*stop = YES) : NO); }]
 
-            anyObject];
+//             anyObject];
 
-    if (! cinfo) {
-        cinfo = [[_unreachable objectsPassingTest: ^(ConnectionInfo* obj, BOOL *stop) {
-                    return (BOOL)((obj.reachability == reachability) ? (*stop = YES) : NO); }]
 
-                    anyObject];
-        active = NO;
-    }
+//     DFNLOG (@"REACHABILITY NTF FOR %@", cinfo.request);
 
-    DFNLOG (@"REACHABILITY NTF FOR %@", cinfo.request);
-
-    int res = [self maybeReactivateConnection: cinfo];
-    if (res)
-    {
-        NSError* err = [ConnectionManager errorWithCode: res
-                                   localizedDescription: LSTR(@"Failed to reactivate request.")];
+//     int res = [self maybeReactivateConnection: cinfo];
+//     if (res)
+//     {
+//         NSError* err = [ConnectionManager errorWithCode: res
+//                                    localizedDescription: LSTR(@"Failed to reactivate request.")];
         
-        ConnectionRequest* creq = cinfo.request;
-        if (creq.completionHandler) creq.completionHandler (creq, err);
-    }
-}
+//         ConnectionRequest* creq = cinfo.request;
+//         if (creq.completionHandler) creq.completionHandler (creq, err);
+//     }
+// }
 
 @end
 
-//----------------------------------------------------------------------------
-NSString* get_active_iface_addr ()
-{
-    return get_iface_addr (nil);
-}
+// //----------------------------------------------------------------------------
+// NSString* get_active_iface_addr ()
+// {
+//     return get_iface_addr (nil);
+// }
 
-//----------------------------------------------------------------------------
-NSString* get_iface_addr (const char* iface)
-{
-    NSString* nsaddr = nil;
+// //----------------------------------------------------------------------------
+// NSString* get_iface_addr (const char* iface)
+// {
+//     NSString* nsaddr = nil;
 
-    struct ifaddrs* interfaces = NULL;
-    struct ifaddrs* temp_addr  = NULL;
+//     struct ifaddrs* interfaces = NULL;
+//     struct ifaddrs* temp_addr  = NULL;
 
-    const char* addr = NULL;
+//     const char* addr = NULL;
 
-    if (! getifaddrs (&interfaces))
-    {
-        temp_addr = interfaces;
-        while(temp_addr != NULL)
-        {
-            if ((temp_addr->ifa_addr->sa_family == AF_INET)
-                && ((temp_addr->ifa_flags & IFF_LOOPBACK) == 0)) // skip loopback
-            {
-                addr = inet_ntoa (((struct sockaddr_in *) temp_addr->ifa_addr)->sin_addr);
+//     if (! getifaddrs (&interfaces))
+//     {
+//         temp_addr = interfaces;
+//         while(temp_addr != NULL)
+//         {
+//             if ((temp_addr->ifa_addr->sa_family == AF_INET)
+//                 && ((temp_addr->ifa_flags & IFF_LOOPBACK) == 0)) // skip loopback
+//             {
+//                 addr = inet_ntoa (((struct sockaddr_in *) temp_addr->ifa_addr)->sin_addr);
 
-                if (addr)
-                {
-                    BOOL found = NO;
-                    if (iface) {
-                        found = (! strcmp (temp_addr->ifa_name, iface)); 
-                    }
-                    else {
-                        iface = ((0 == strcmp (temp_addr->ifa_name, IFACE_WIFI)) ? IFACE_WIFI : // wifi on iphone
-                                 (0 == strcmp (temp_addr->ifa_name, IFACE_WWAN)  ? IFACE_WWAN : // cellurar network on iphone
-                                  NULL));
+//                 if (addr)
+//                 {
+//                     BOOL found = NO;
+//                     if (iface) {
+//                         found = (! strcmp (temp_addr->ifa_name, iface)); 
+//                     }
+//                     else {
+//                         iface = ((0 == strcmp (temp_addr->ifa_name, IFACE_WIFI)) ? IFACE_WIFI : // wifi on iphone
+//                                  (0 == strcmp (temp_addr->ifa_name, IFACE_WWAN)  ? IFACE_WWAN : // cellurar network on iphone
+//                                   NULL));
 
-                        found = (NULL != iface);
-                    }
+//                         found = (NULL != iface);
+//                     }
 
-                    if (found)
-                    {
-                        nsaddr = [NSString stringWithUTF8String: addr];
-                        break;
-                    }
-                }
+//                     if (found)
+//                     {
+//                         nsaddr = [NSString stringWithUTF8String: addr];
+//                         break;
+//                     }
+//                 }
 
-            }
-            temp_addr = temp_addr->ifa_next;
-        }
-    }
+//             }
+//             temp_addr = temp_addr->ifa_next;
+//         }
+//     }
 
-    DFNLOG (@"IFACE NAME: %s IP: %s", iface ?: "UNKNOWN", addr ?: "???.???.???.???");
+//     DFNLOG (@"IFACE NAME: %s IP: %s", iface ?: "UNKNOWN", addr ?: "???.???.???.???");
 
-    freeifaddrs (interfaces);
-    return nsaddr;
-}
+//     freeifaddrs (interfaces);
+//     return nsaddr;
+// }
 
 /* EOF */
