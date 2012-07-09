@@ -449,11 +449,13 @@
 
     if (!cinfo) return;
 
+    [cinfo.retryTimer invalidate];
     cinfo.retryTimer = nil;
     cinfo.connection = [NSURLConnection 
                            connectionWithRequest: cinfo.request.request
                                         delegate: self];
     self.lastRequestDate = [NSDate date];
+    DFNLOG(@"RETRY REQUEST %@", cinfo.request.request.URL);
 }
 
 //----------------------------------------------------------------------------
