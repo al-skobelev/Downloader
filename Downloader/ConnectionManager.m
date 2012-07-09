@@ -242,6 +242,10 @@
             }
         }
     }
+    else if (creq.data.length)
+    {
+        cinfo.downloadedLength += creq.data.length;
+    }
     
     NSURLConnection* connection;
     connection = [NSURLConnection connectionWithRequest: creq.request
@@ -345,7 +349,7 @@
 {
     NSTimeInterval delay = 0;
     if (_lastRequestDate) delay = (_requestDelay - [[NSDate date] timeIntervalSinceDate: _lastRequestDate]);
-    return (delay > 0 ? delay : 0);
+    return (delay > 0 ? delay + 0.001 : 0);
 }
 
 //----------------------------------------------------------------------------
@@ -360,8 +364,7 @@
         int ecode = [self activateRequest: req];
         if (ecode == CONNECTION_MANAGER_ERROR_CODE_SHOULD_DELAY)
         {
-            NSTimeInterval delay = [self delayForNextRequest] + 0.001;
-            PERFORM_W_DELAY (self, activateWaitedRequests, nil, delay);
+            PERFORM_W_DELAY (self, activateWaitedRequests, nil, [self delayForNextRequest]);
             return;
         }
         else if (ecode == CONNECTION_MANAGER_ERROR_CODE_ACTIVE_LIMIT_EXCEEDED)
@@ -393,10 +396,20 @@
     }
     [_waited addObject: creq];
 
-    NSTimeInterval delay = [self delayForNextRequest] + 0.001;
-    
-    PERFORM_W_DELAY (self, activateWaitedRequests, nil, delay);
+    [self activateWaitedRequests];
     return YES;
+}
+
+
+//----------------------------------------------------------------------------
+- (void) cancelConnection: (ConnectionInfo*) cinfo
+{
+    if (cinfo) 
+    {
+        [cinfo.connection cancel];
+        [_active removeObject: cinfo];
+        [self activateWaitedRequests];
+    }
 }
 
 //----------------------------------------------------------------------------
@@ -409,13 +422,9 @@
     if (i != NSNotFound) {
         [_waited removeObjectAtIndex: i];
     }
-    else
-    {
-        ConnectionInfo* cinfo = [self activeConnectionInfoByRequest: creq];
-        if (cinfo) {
-            [cinfo.connection cancel];
-            [_active removeObject: cinfo];
-        }
+    else {
+        [self cancelConnection: 
+                  [self activeConnectionInfoByRequest: creq]];
     }
 }
 
@@ -447,79 +456,55 @@
     self.lastRequestDate = [NSDate date];
 }
 
-// NSURLConnection delegate's methods
-//----------------------------------------------------------------------------
-// - (void) connection: (NSURLConnection*) connection 
-//          decideDestinationWithSuggestedFilename: (NSString *) filepath
-// {
-//     Cons* cons = [self activeConnectionInfoByConnection: connection];
-
-//     if (! cons) return;
-
-//     ConnectionRequest* creq = CONS_REQ(cons);
-//     NSString* filename = [filepath lastPathComponent];
-//     NSString* path = self.defaultDownloadPath;
-
-//     if (creq) { 
-//         if (! [creq.filename isAbsolutePath]) 
-//         {
-//             path = STR_ADDPATH(path, creq.filename);
-//         } else {
-//             path = [NSString stringWithString: creq.filename];
-//         }
-//     }
-
-//     if (path.length)
-//     {        
-//         BOOL pathIsDir = NO;
-//         if ([[NSFileManager defaultManager] 
-//                 fileExistsAtPath: path 
-//                      isDirectory: &pathIsDir]
-//             && pathIsDir)
-//         {
-//             path = [path stringByAppendingPathComponent: filename];
-//         } 
-//         else 
-//         {
-//             NSString* ext = [filename pathExtension];
-//             if (([path pathExtension].length == 0)
-//                  && (ext.length > 0))
-//             {
-//                 path = STR_ADDEXT (path, ext);
-//             }
-//         }    
-
-//         [creq setFilename: path];
-//         [connection setDestination: path allowOverwrite: YES];
-//     }
-// }
-
-// - (NSURLRequest *)connection:(NSURLConnection *)connection willSendRequest:(NSURLRequest *)request redirectResponse:(NSURLResponse *)response;
-
 //----------------------------------------------------------------------------
 - (void) connection: (NSURLConnection*) connection
  didReceiveResponse: (NSURLResponse*) response
 {
+    int http_status = [(NSHTTPURLResponse*)response statusCode];
+
     ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
-    // ConnectionRequest* creq = cinfo.request;
+    ConnectionRequest* creq = cinfo.request;
+
+    if (! cinfo) return;
+
+    if (http_status >= 400)
+    {
+        NSError* err = 
+            [ConnectionManager errorWithCode: CONNECTION_MANAGER_ERROR_CODE_HTTP_ERROR
+                        localizedDescription: STRLF(@"Server returned error: %d", http_status)];
+        
+        if (creq.completionHandler) creq.completionHandler (cinfo.request, err);
+        [self cancelConnection: cinfo];
+    }
+
 
     cinfo.retryCount = 0;
     cinfo.serverAcceptsRanges = ([[[(NSHTTPURLResponse*)response allHeaderFields]
                                       objectForKey: @"Accept-Ranges"] 
                                      rangeOfString: @"bytes"].length > 0);
-    if (cinfo.downloadedLength)
+
+
+    cinfo.contentLength = response.expectedContentLength;
+
+    if (http_status != 206)
     {
-        if ([(NSHTTPURLResponse*)response statusCode] != 206)
+        if (cinfo.downloadedLength)
         {
-            cinfo.downloadedLength = 0;
-            unlink ([cinfo.downloadPath fileSystemRepresentation]);
+            if (cinfo.downloadPath) 
+            {
+                cinfo.downloadedLength = 0;
+                unlink ([cinfo.downloadPath fileSystemRepresentation]);
+            }
+            else if (creq.data.length)
+            {
+                creq.data = nil;
+            }
         }
     }
-    cinfo.contentLength = cinfo.downloadedLength + response.expectedContentLength;
+
+    cinfo.contentLength += (cinfo.downloadPath ? cinfo.downloadedLength : creq.data.length);
 }
 
-
-// - (NSCachedURLResponse *)connection:(NSURLConnection *)connection willCacheResponse:(NSCachedURLResponse *)cachedResponse;
 
 //----------------------------------------------------------------------------
 - (void) connection: (NSURLConnection*) connection 
@@ -530,14 +515,15 @@
         ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
         ConnectionRequest* creq = cinfo.request;
 
-        if (cinfo.downloadPath) {
+        if (cinfo.downloadPath) 
+        {
             FILE* file = fopen (STR_FSREP (cinfo.downloadPath), "a");
-            if (file) {
+            if (file) 
+            {
                 if (data.length != fwrite (data.bytes, 1, data.length, file))
                 {
                     DFNLOG(@"ERROR while writing data in file '%@'", creq.datapath);
                 }
-
                 fclose (file);
             }
         }
@@ -556,58 +542,55 @@
 - (void) connection: (NSURLConnection*) connection 
  didFinishWithError: (NSError*) err
 {
-    @autoreleasepool
-    {
-        ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
-        ConnectionRequest* creq = cinfo.request;
+    ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
+    ConnectionRequest* creq = cinfo.request;
 
-        DFNLOG (@"Connection FINISHED: %@\nERROR: %@\n", creq.request.URL, err);
-        //[cinfo.reachability stopNotifier];
+    DFNLOG (@"Connection FINISHED: %@\nERROR: %@\n", creq.request.URL, err);
             
-        if ([_active containsObject: cinfo])
+    if ([_active containsObject: cinfo])
+    {
+        if (err)
         {
-            if (err)
-            {
-                static NSTimeInterval _s_interval[] = { 1.0, 2.0, 3.0 };
-                cinfo.connection = nil;
+            static NSTimeInterval _s_interval[] = { 1.0, 2.0, 3.0 };
+            cinfo.connection = nil;
                 
-                if (cinfo.retryCount < NELEMS(_s_interval))
-                {
-                    cinfo.retryTimer = [NSTimer scheduledTimerWithTimeInterval: _s_interval [cinfo.retryCount++]
-                                                                        target: self
-                                                                      selector: @selector(onRetryConnectionTimer:)
-                                                                      userInfo: nil
-                                                                       repeats: NO];
-                }                    
-            }
-            else 
+            if (cinfo.retryCount < NELEMS(_s_interval))
             {
-                if (creq.datapath && cinfo.downloadPath)
-                {
-                    unlink (STR_FSREP (creq.datapath));
+                cinfo.retryTimer = 
+                    [NSTimer scheduledTimerWithTimeInterval: _s_interval [cinfo.retryCount++]
+                                                     target: self
+                                                   selector: @selector(onRetryConnectionTimer:)
+                                                   userInfo: nil
+                                                    repeats: NO];
+            }                    
+        }
+        else 
+        {
+            if (creq.datapath && cinfo.downloadPath)
+            {
+                unlink (STR_FSREP (creq.datapath));
                     
-                    NSFileManager* fm = [NSFileManager defaultManager];
+                NSFileManager* fm = [NSFileManager defaultManager];
 
-                    if (! [fm moveItemAtPath: cinfo.downloadPath
-                                      toPath: creq.datapath
-                                       error: &err])
-                    {
-                        DFNLOG (@"ERROR: Failed to copy partial file to '%@'. %@", creq.datapath, [err localizedDescription]);
-                    }
-                }
-            }
-
-            if (! cinfo.retryTimer) 
-            {
-                [_active removeObject: cinfo];
-                if (creq) {
-                    if (creq.completionHandler) creq.completionHandler (creq, err);
+                if (! [fm moveItemAtPath: cinfo.downloadPath
+                                  toPath: creq.datapath
+                                   error: &err])
+                {
+                    DFNLOG (@"ERROR: Failed to copy partial file to '%@'. %@", creq.datapath, [err localizedDescription]);
                 }
             }
         }
 
-        [self activateWaitedRequests];
+        if (! cinfo.retryTimer) 
+        {
+            [_active removeObject: cinfo];
+            if (creq) {
+                if (creq.completionHandler) creq.completionHandler (creq, err);
+            }
+        }
     }
+
+    [self activateWaitedRequests];
 }
 
 //----------------------------------------------------------------------------
@@ -623,18 +606,6 @@
     [self connection: connection didFinishWithError: error];
 }
 
-////----------------------------------------------------------------------------
-//- (void)                   connection: (NSURLConnection*)connection 
-//  didReceiveAuthenticationChallenge: (NSURLAuthenticationChallenge*) challenge
-//{
-//}
-//
-////----------------------------------------------------------------------------
-//- (void)        connection: (NSURLConnection*) connection 
-//  didReceiveDataOfLength: (unsigned) length
-//{ }
-//
-
 //----------------------------------------------------------------------------
 - (NSURLRequest*) connection: (NSURLConnection*) connection 
              willSendRequest: (NSURLRequest*) request 
@@ -643,7 +614,7 @@
     ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
     ConnectionRequest* creq = cinfo.request;
     
-    if (! creq) {
+    if (! cinfo) {
         [connection cancel];
         return nil;
     }
@@ -682,93 +653,6 @@
 
     return nil;
 }
-
-// //----------------------------------------------------------------------------
-// - (int) maybeReactivateConnection: (ConnectionInfo*) cinfo
-// {
-//     DFNLOG(@"MAY BE REACTIVATE: %@", cinfo);
-//     int res = -1;
-//     if (cinfo)
-//     {
-//         NetworkStatus rstatus = [cinfo.reachability currentReachabilityStatus];
-
-//         cinfo.reachabilityStatus = rstatus;
-
-//         BOOL active = [_active containsObject: cinfo];
-
-//         NSString* ifaddr = get_active_iface_addr();
-//         if (active && (NotReachable != rstatus))
-//         {
-//             if (ifaddr && STR_EQL (cinfo.ifaddr, ifaddr))
-//             {
-//                 DFNLOG(@"SAME IFADDR: WILL NOT REACTIVATE ACTIVE");
-//                 return 0;
-//             }
-
-//         }
-//         if ((NotReachable == rstatus) && cinfo.retryTimer)
-//         {
-//             DFNLOG(@"NOT REACHABLE YET: WILL NOT REACTIVATE");
-//             return 0;
-//         }
-
-//         DFNLOG(@"WILL REACTIVATE");
-
-//         if (active) 
-//         {
-//             DFNLOG(@"IT WAS ACTIVE: CANCEL IT");
-
-//             [_active removeObject: cinfo];
-//             [cinfo.connection cancel];
-//             cinfo.connection = nil;
-//         }
-
-//         res = [self activateRequest: cinfo.request];
-
-//         if (res)
-//         {
-//             DFNLOG(@"FAILED TO REACTIVATE");
-
-//             if ((res == CONNECTION_MANAGER_ERROR_CODE_ACTIVE_LIMIT_EXCEEDED)
-//                 || (res == CONNECTION_MANAGER_ERROR_CODE_SHOULD_DELAY))
-//             {
-//                 if (_waited.count) [_waited insertObject: cinfo.request atIndex: 0];
-//                 else [_waited addObject: cinfo.request];
-                    
-//                 res = 0;
-//             }
-//         }
-//     }
-
-//     DFNLOG(@"MAY BE REACTIVATE RETURN %d", res);
-//     return res;
-// }
-
-// //----------------------------------------------------------------------------
-// - (void) onReachabilityNtf: (NSNotification*) ntf
-// {
-//     Reachability* reachability = ntf.object;
-
-//     BOOL active = YES;
-//     ConnectionInfo* cinfo = 
-//         [[_active objectsPassingTest: ^(ConnectionInfo* obj, BOOL *stop) {
-//             return (BOOL)((obj.reachability == reachability) ? (*stop = YES) : NO); }]
-
-//             anyObject];
-
-
-//     DFNLOG (@"REACHABILITY NTF FOR %@", cinfo.request);
-
-//     int res = [self maybeReactivateConnection: cinfo];
-//     if (res)
-//     {
-//         NSError* err = [ConnectionManager errorWithCode: res
-//                                    localizedDescription: LSTR(@"Failed to reactivate request.")];
-        
-//         ConnectionRequest* creq = cinfo.request;
-//         if (creq.completionHandler) creq.completionHandler (creq, err);
-//     }
-// }
 
 @end
 
