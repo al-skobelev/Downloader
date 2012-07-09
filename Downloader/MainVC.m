@@ -104,18 +104,19 @@
 }
 
 //----------------------------------------------------------------------------
-- (IBAction)onStartBtn 
+- (IBAction) onStartBtn 
 {
-    if ([APPD startDownloadWithCompletionHandler: (^(NSError* err) { [self downloadFinishedWithError: err]; })
-                                   updateHandler: (^(size_t downloaded, size_t expected) 
-                                                   { [self updateDownloaded: downloaded expected: expected]; })])
+    if ([APPD startDownload: self.filenameField.text
+          completionHandler: (^(NSError* err) { [self downloadFinishedWithError: err]; })
+              updateHandler: (^(size_t downloaded, size_t expected) 
+                              { [self updateDownloaded: downloaded expected: expected]; })])
     {
         [self updateUI: YES];
     }
 }
 
 //----------------------------------------------------------------------------
-- (IBAction)onStopBtn 
+- (IBAction) onStopBtn 
 {
     [self updateUI: NO];
     [APPD stopDownload];
@@ -130,11 +131,20 @@
     [self updateUI: NO];
 }
 
+//----------------------------------------------------------------------------
 - (void)viewDidUnload {
     [self setActivityIndicator:nil];
     [self setCountLabel:nil];
     [super viewDidUnload];
 }
+
+//----------------------------------------------------------------------------
+- (BOOL) textFieldShouldReturn: (UITextField*) textField
+{
+    [self.filenameField resignFirstResponder];
+    return NO;
+}
+
 @end
 
 /* EOF */

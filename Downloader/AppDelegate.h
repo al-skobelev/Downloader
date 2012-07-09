@@ -16,8 +16,9 @@
 @property (readonly)          ConnectionManager* connectionManager;
 @property (readonly)          NSString*          downloadPath;
 
-- (BOOL) startDownloadWithCompletionHandler: (void (^)(NSError* err)) completionHandler
-                              updateHandler: (void (^)(size_t downloaded, size_t expected)) updateHandler;
+- (BOOL) startDownload: (NSString*) file
+     completionHandler: (void (^)(NSError* err)) completionHandler
+         updateHandler: (void (^)(size_t downloaded, size_t expected)) updateHandler;
 
 - (void) stopDownload;
 - (void) resetDownload;

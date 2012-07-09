@@ -46,12 +46,34 @@
 }
 
 //----------------------------------------------------------------------------
-- (BOOL) startDownloadWithCompletionHandler: (void (^)(NSError* err)) completionHandler
-                              updateHandler: (void (^)(size_t downloaded, size_t expected)) updateHandler
+- (BOOL) startDownload: (NSString*) file
+     completionHandler: (void (^)(NSError* err)) completionHandler
+         updateHandler: (void (^)(size_t downloaded, size_t expected)) updateHandler
 {
+    NSURL* url = nil;
+    if ([file hasPrefix: @"http"])
+    {
+        url = [NSURL URLWithString: file];
+    }
+    else if (file.length)
+    {
+        url = [[NSURL alloc]
+                  initWithScheme: [self.fileURL scheme]
+                            host: [self.fileURL host]
+                            path: STR_ADDPATH ([[self.fileURL path] stringByDeletingLastPathComponent], file)];
+    }
+    else {
+        url = self.fileURL;
+    }
+    
+    if (! url)
+    {
+        DFNLOG(@"ERROR: Failed to create URL for file \"%@\"", file);
+        return NO;
+    }
 
-    NSURLRequest* req = [NSURLRequest requestWithURL: self.fileURL];
-    NSString* fname = [[self.fileURL path] lastPathComponent];
+    NSURLRequest* req = [NSURLRequest requestWithURL: url];
+    NSString* fname = [[url path] lastPathComponent];
     NSString* datapath = STR_ADDPATH (self.downloadPath, fname);
 
     ConnectionRequest* creq = [ConnectionRequest new];

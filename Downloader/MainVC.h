@@ -9,7 +9,7 @@
 #import <UIKit/UIKit.h>
 
 //============================================================================
-@interface MainVC : UIViewController
+@interface MainVC : UIViewController <UITextFieldDelegate>
 
 @property (weak, nonatomic) IBOutlet UITextField* filenameField;
 @property (weak, nonatomic) IBOutlet UIBarButtonItem* stopBtn;
