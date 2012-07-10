@@ -38,7 +38,7 @@
 {
     NSString* descr = STRF(@"%@ = {\n  URL = <%@>", [super description], [_request URL]);
     
-    descr = ((_datapath) ? STRF (@"%@ datapath = %@\n}", _datapath)
+    descr = ((_datapath) ? STRF (@"%@ datapath = %@\n}", descr, _datapath)
              : STR_ADD (descr, @"\n}"));
     
     return descr;
@@ -83,11 +83,15 @@
     NSMutableArray* _waited;
     unsigned        _waitQueueLimit;
     NSTimeInterval  _requestDelay;
+
+    UIBackgroundTaskIdentifier _backgroundTaskId;
 }
 
 @property (nonatomic, retain) NSDate* lastRequestDate;
 
-//- (int) maybeReactivateConnection: (ConnectionInfo*) cinfo;
+- (void) startBackgroundTask;
+- (void) stopBackgroundTask;
+
 @end
 
 
@@ -134,7 +138,11 @@
         _active = [NSMutableSet new];
         _waited = [NSMutableArray new];
 
+        _backgroundTaskId = UIBackgroundTaskInvalid;
+
         //ADD_OBSERVER (kReachabilityChangedNotification, self, onReachabilityNtf:);
+        ADD_OBSERVER (UIApplicationDidEnterBackgroundNotification, self, onEnterBackgroundNtf:);
+        ADD_OBSERVER (UIApplicationWillEnterForegroundNotification, self, onExitBackgroundNtf:);
     }
     return self;
 }
@@ -151,6 +159,22 @@
 - (void) dealloc
 {
     [self cancelAllRequests];
+    REMOVE_OBSERVER (UIApplicationDidEnterBackgroundNotification,  self);
+    REMOVE_OBSERVER (UIApplicationWillEnterForegroundNotification, self);
+}
+
+//----------------------------------------------------------------------------
+- (void) onEnterBackgroundNtf: (NSNotification*) ntf
+{
+    if (_active.count) {
+        [self startBackgroundTask];
+    }
+}
+
+//----------------------------------------------------------------------------
+- (void) onExitBackgroundNtf: (NSNotification*) ntf
+{
+    [self stopBackgroundTask];
 }
 
 //----------------------------------------------------------------------------
@@ -312,17 +336,21 @@
                     else {
                         unlink ([cinfo.downloadPath fileSystemRepresentation]);
                     }
-                    
-                    if (cinfo.downloadedLength)
-                    {
-                        NSMutableURLRequest* req = [creq.request mutableCopy];
-                   
-                        id val = STRF(@"bytes=%d-", cinfo.downloadedLength);
-                        [req setValue: val forHTTPHeaderField: @"Range"];
-                        creq.request = req;
-                    }
                 }
             }
+            else {
+                cinfo.downloadedLength = creq.data.length;
+            }
+
+            if (cinfo.downloadedLength)
+            {
+                NSMutableURLRequest* req = [creq.request mutableCopy];
+                
+                id val = STRF(@"bytes=%d-", cinfo.downloadedLength);
+                [req setValue: val forHTTPHeaderField: @"Range"];
+                creq.request = req;
+            }
+
             
             NSURLConnection* connection;
             connection = [NSURLConnection connectionWithRequest: creq.request
@@ -357,6 +385,11 @@
 {
     CANCEL_PERFORM (self, activateWaitedRequests, nil);
 
+    if (! (_waited.count && _active.count))
+    {
+        [self stopBackgroundTask];
+    }
+ 
     while (_waited.count && (!_limit || (_active.count < _limit)))
     {
         ConnectionRequest* req = [_waited objectAtIndex: 0];
@@ -384,6 +417,30 @@
 }
 
 //----------------------------------------------------------------------------
+- (void) stopBackgroundTask
+{
+    if (_backgroundTaskId != UIBackgroundTaskInvalid) 
+    {
+        [[UIApplication sharedApplication] endBackgroundTask: _backgroundTaskId];
+        _backgroundTaskId = UIBackgroundTaskInvalid;
+        DFNLOG(@"STOP BACKGROUND TASK");
+    }
+}
+
+//----------------------------------------------------------------------------
+- (void) startBackgroundTask
+{
+    if (_backgroundTaskId == UIBackgroundTaskInvalid) 
+    {
+        _backgroundTaskId = 
+            [[UIApplication sharedApplication]
+                beginBackgroundTaskWithExpirationHandler: ^{[self stopBackgroundTask];}];
+        DFNLOG(@"START BACKGROUND TASK");
+    }
+}
+
+
+//----------------------------------------------------------------------------
 - (BOOL) addRequest: (ConnectionRequest*) creq
               error: (NSError**) err
 {
@@ -394,6 +451,9 @@
            localizedDescription: LSTR(@"The waiting connections queue overflow.")];
         return NO;
     }
+
+    // [self startBackgroundTask];
+
     [_waited addObject: creq];
 
     [self activateWaitedRequests];
@@ -436,6 +496,7 @@
     for (ConnectionInfo* cinfo in _active) [cinfo.connection cancel];
 
     [_active removeAllObjects];
+    [self stopBackgroundTask];
 }
 
 //----------------------------------------------------------------------------
@@ -454,9 +515,11 @@
     cinfo.connection = [NSURLConnection 
                            connectionWithRequest: cinfo.request.request
                                         delegate: self];
+
     self.lastRequestDate = [NSDate date];
     DFNLOG(@"RETRY REQUEST %@", cinfo.request.request.URL);
 }
+
 
 //----------------------------------------------------------------------------
 - (void) connection: (NSURLConnection*) connection
@@ -512,6 +575,8 @@
 - (void) connection: (NSURLConnection*) connection 
      didReceiveData: (NSData*) data
 {
+    DFNLOG(@"GOT DATA OF LENGTH: %d", data.length);
+
     if (data.length)
     {
         ConnectionInfo* cinfo = [self activeConnectionInfoByConnection: connection];
